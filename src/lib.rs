@@ -13,10 +13,10 @@ const CAMERA_TARGET: Vec3 = glam::f32::Vec3::ZERO;
 const CAMERA_POSITION: Vec3 = Vec3 {
     x: 0.0,
     y: 0.0,
-    z: 4.0,
+    z: 200.0,
 };
 const Z_NEAR: f32 = 0.1;
-const Z_FAR: f32 = 10.0;
+const Z_FAR: f32 = 200.0;
 
 // A macro to provide `println!(..)`-style syntax for `console.log` logging.
 macro_rules! log {
@@ -56,6 +56,7 @@ impl WebGLState {
             .viewport(0, 0, canvas.width() as i32, canvas.height() as i32);
         self.context.enable(WebGl2RenderingContext::DEPTH_TEST);
         self.context.enable(WebGl2RenderingContext::CULL_FACE);
+        self.context.cull_face(WebGl2RenderingContext::BACK);
 
         // get shader uniform locations
         let u_diffuse = self
@@ -168,7 +169,7 @@ pub fn create_webgl_state() -> Result<WebGLState, JsValue> {
         r##"
         attribute vec4 a_position;
         attribute vec3 a_normal;
-         
+        
         uniform mat4 u_projection;
         uniform mat4 u_view;
         uniform mat4 u_world;
@@ -323,8 +324,9 @@ fn load_model(reader: &mut impl BufRead) -> Result<(Indices, Verts, Normals), Bo
     let (models, _) = tobj::load_obj_buf(
         reader,
         &tobj::LoadOptions {
+            reorder_data: false,
             single_index: true, //nah
-            triangulate: true,  //yes please
+            triangulate: false, //yes please
             ignore_points: true,
             ignore_lines: true,
         },
@@ -336,10 +338,18 @@ fn load_model(reader: &mut impl BufRead) -> Result<(Indices, Verts, Normals), Bo
     let mut vertex_normals = Vec::new();
     for tobj::Model { mesh, .. } in models {
         log!("Indices: {:?}", mesh.indices);
+        log!("Normals: {:?}", mesh.normals);
+        log!("Normal_Indices: {:?}", mesh.normal_indices);
+
         indices.extend(mesh.indices);
         verticies.extend(mesh.positions);
         vertex_normals.extend(mesh.normals);
     }
+
+    let copy_cube_normals = Vec::<f32>::from([
+        0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, -1.0000, 0.0000, 0.0000, 0.0000, -1.0000,
+        0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 0.0000, -1.0000,
+    ]);
 
     Ok((indices, verticies, vertex_normals))
 }
