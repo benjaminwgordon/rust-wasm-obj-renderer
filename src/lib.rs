@@ -5,7 +5,7 @@ use std::error::Error;
 use std::io::{BufRead, BufReader};
 use std::rc::Rc;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebGlProgram, WebGlShader};
 extern crate web_sys;
@@ -17,7 +17,7 @@ const CAMERA_POSITION: Vec3 = Vec3 {
     z: 200.0,
 };
 const Z_NEAR: f32 = 0.1;
-const Z_FAR: f32 = 200.0;
+const Z_FAR: f32 = 400.0;
 
 // A macro to provide `println!(..)`-style syntax for `console.log` logging.
 macro_rules! log {
@@ -64,7 +64,7 @@ impl WebGLState {
             uniform mat4 u_world;
                  
             void main() {
-              gl_Position = u_projection * u_view * u_world * vec4(a_position, 0.0);
+              gl_Position = u_projection * u_view * u_world * vec4(a_position, 1.0);
             }
             "##,
         )?;
@@ -107,17 +107,16 @@ impl WebGLState {
 
         // do one-time matrix setup
         self.context.use_program(Some(&self.program));
+
         let f = Rc::new(RefCell::new(None));
         let g = f.clone();
 
-        *g.borrow_mut() = Some(Closure::new(move || {
-            &self.clone().draw(canvas.width(), canvas.height());
-            let _ = f.borrow_mut().take();
+        *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+            let _ = self.draw(canvas.width(), canvas.height());
             // Schedule ourself for another requestAnimationFrame callback.
             request_animation_frame(f.borrow().as_ref().unwrap());
-        }));
+        }) as Box<dyn FnMut()>));
         request_animation_frame(g.borrow().as_ref().unwrap());
-
         Ok(())
     }
 
@@ -132,11 +131,32 @@ impl WebGLState {
                 let world_matrix = Mat4::IDENTITY;
                 let field_of_view_radians = 60.0 * 3.141592653589793 / 180.0;
                 let aspect: f32 = canvas_width as f32 / canvas_height as f32;
+                log!("aspect: {}", aspect);
                 let projection_matrix =
                     Mat4::perspective_lh(field_of_view_radians, aspect, Z_NEAR, Z_FAR);
                 let up: Vec3 = Vec3::from([0.0, 1.0, 0.0]);
                 let view_matrix = Mat4::look_at_lh(CAMERA_POSITION, CAMERA_TARGET, up);
+
                 // TODO: rotate world space
+                let x_rotation_matrix = Mat4::from_rotation_x(
+                    (web_sys::window().unwrap().performance().unwrap().now() / 40.0 * 3.1515926535
+                        / 180.0) as f32,
+                );
+
+                let y_rotation_matrix = Mat4::from_rotation_y(
+                    (web_sys::window().unwrap().performance().unwrap().now() / 40.0 * 3.1515926535
+                        / 180.0) as f32,
+                );
+
+                let z_rotation_matrix = Mat4::from_rotation_z(
+                    (web_sys::window().unwrap().performance().unwrap().now() / 40.0 * 3.1515926535
+                        / 180.0) as f32,
+                );
+
+                let rotated_world_matrix = world_matrix
+                    .mul_mat4(&x_rotation_matrix)
+                    .mul_mat4(&y_rotation_matrix)
+                    .mul_mat4(&z_rotation_matrix);
 
                 // get shader uniform locations
                 let u_view = self.context.get_uniform_location(&self.program, "u_view");
@@ -154,7 +174,7 @@ impl WebGLState {
                 self.context.uniform_matrix4fv_with_f32_array(
                     u_world.as_ref(),
                     false,
-                    &world_matrix.to_cols_array(),
+                    &rotated_world_matrix.to_cols_array(),
                 );
                 self.context.uniform_matrix4fv_with_f32_array(
                     u_projection.as_ref(),
@@ -168,12 +188,13 @@ impl WebGLState {
                     WebGl2RenderingContext::FLOAT,
                 );
 
-                self.context.clear_color(0.9, 0.9, 0.9, 1.0);
+                self.context.clear_color(0.2, 0.2, 0.2, 1.0);
                 self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
+
                 self.context.draw_arrays(
-                    WebGl2RenderingContext::TRIANGLES,
-                    vert_position_count as i32,
+                    WebGl2RenderingContext::POINTS,
                     0,
+                    vert_position_count as i32,
                 );
             }
         }
@@ -203,7 +224,6 @@ impl WebGLState {
         }
 
         let file = filelist.get(0).expect("Failed to get File from filelist!");
-        log!("file content: {:?}", file);
         let file_reader: web_sys::FileReader = match web_sys::FileReader::new() {
             Ok(f) => f,
             Err(_) => {
@@ -294,7 +314,7 @@ pub fn link_program(
 
 type Verts = Vec<f32>;
 
-fn load_model(reader: &mut impl BufRead) -> Result<Verts, Box<dyn Error>> {
+pub fn load_model(reader: &mut impl BufRead) -> Result<Verts, Box<dyn Error>> {
     let (models, _) = tobj::load_obj_buf(
         reader,
         &tobj::LoadOptions {
@@ -317,17 +337,7 @@ fn load_model(reader: &mut impl BufRead) -> Result<Verts, Box<dyn Error>> {
 
 impl WebGLState {
     pub fn load_buffer_from_array(&self, location: &str, array: Vec<f32>, data_type: u32) -> i32 {
-        log!(
-            "Getting vertex attribute location for location({:?})",
-            location
-        );
-
         let position_attribute_location = self.context.get_attrib_location(&self.program, location);
-
-        log!(
-            "array_buffer_attribute_location: {:?}",
-            position_attribute_location
-        );
 
         let buffer = self
             .context
@@ -362,21 +372,9 @@ impl WebGLState {
     }
 }
 
-fn request_animation_frame(f: &Closure<dyn FnMut()>) {
-    window()
+pub fn request_animation_frame(f: &Closure<dyn FnMut()>) {
+    web_sys::window()
+        .unwrap()
         .request_animation_frame(f.as_ref().unchecked_ref())
-        .expect("should register `requestAnimationFrame` OK");
-}
-
-fn document() -> web_sys::Document {
-    window()
-        .document()
-        .expect("should have a document on window")
-}
-
-fn body() -> web_sys::HtmlElement {
-    document().body().expect("document should have a body")
-}
-fn window() -> web_sys::Window {
-    web_sys::window().expect("no global `window` exists")
+        .unwrap();
 }

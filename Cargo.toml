@@ -25,7 +25,7 @@ console_error_panic_hook = { version = "0.1.6", optional = true }
 # compared to the default allocator's ~10K. It is slower than the default
 # allocator, however.
 wee_alloc = { version = "0.4.5", optional = true }
-web-sys = { version = "0.3.61", features = ["HtmlInputElement", "FileReader", "ProgressEvent", "FileList", "File", "console", "HtmlCanvasElement", "WebGlBuffer", "WebGlVertexArrayObject", "WebGl2RenderingContext", "WebGlProgram", "WebGlShader", "Window", "Document", "Element", "WebGlUniformLocation"] }
+web-sys = { version = "0.3.61", features = ["HtmlInputElement", "FileReader", "ProgressEvent", "FileList", "File", "console", "HtmlCanvasElement", "WebGlBuffer", "WebGlVertexArrayObject", "WebGl2RenderingContext", "WebGlProgram", "WebGlShader", "Window", "Document", "Element", "WebGlUniformLocation", "Performance"] }
 js-sys = "0.3.61"
 obj = "0.10.2"
 glam = "0.23.0"
