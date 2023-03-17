@@ -1,7 +1,9 @@
 mod utils;
 
+use std::cell::RefCell;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
+use std::rc::Rc;
 
 use glam::{Mat4, Vec3};
 use wasm_bindgen::prelude::*;
@@ -26,14 +28,21 @@ macro_rules! log {
 
 #[wasm_bindgen]
 #[derive(Clone)]
+struct Model {
+    vertices: Vec<f32>,
+}
+
+#[wasm_bindgen]
+#[derive(Clone)]
 pub struct WebGLState {
     context: WebGl2RenderingContext,
     program: WebGlProgram,
+    model: Option<Model>,
 }
 
 #[wasm_bindgen]
 impl WebGLState {
-    #[wasm_bindgen]
+    #[wasm_bindgen(constructor)]
     pub fn new() -> Result<WebGLState, JsValue> {
         let document = web_sys::window().unwrap().document().unwrap();
         let canvas = document.get_element_by_id("canvas").unwrap();
@@ -73,10 +82,15 @@ impl WebGLState {
 
         let program = link_program(&context, &vert_shader, &frag_shader)?;
 
-        Ok(WebGLState { context, program })
+        Ok(WebGLState {
+            context,
+            program,
+            model: None,
+        })
     }
 
-    pub fn update_render_verts(&self, vertices: Vec<f32>) {
+    #[wasm_bindgen]
+    pub fn init_render_loop(self) -> Result<(), JsValue> {
         let canvas = self
             .context
             .canvas()
@@ -91,50 +105,78 @@ impl WebGLState {
         self.context.enable(WebGl2RenderingContext::CULL_FACE);
         self.context.cull_face(WebGl2RenderingContext::BACK);
 
-        // get shader uniform locations
-
-        let u_view = self.context.get_uniform_location(&self.program, "u_view");
-        let u_world = self.context.get_uniform_location(&self.program, "u_world");
-        let u_projection = self
-            .context
-            .get_uniform_location(&self.program, "u_projection");
-
-        let field_of_view_radians = 60.0 * 3.141592653589793 / 180.0;
-        let aspect: f32 = canvas.width() as f32 / canvas.height() as f32;
-        let projection =
-            glam::f32::Mat4::perspective_lh(field_of_view_radians, aspect, Z_NEAR, Z_FAR);
-
-        let up: Vec3 = Vec3::from([0.0, 1.0, 0.0]);
-        let camera = glam::f32::Mat4::look_at_lh(CAMERA_POSITION, CAMERA_TARGET, up);
-        let view = camera.inverse();
-
+        // do one-time matrix setup
         self.context.use_program(Some(&self.program));
+        let f = Rc::new(RefCell::new(None));
+        let g = f.clone();
 
-        // set shader uniforms
-        self.context.uniform_matrix4fv_with_f32_array(
-            u_view.as_ref(),
-            false,
-            &view.to_cols_array(),
-        );
-        self.context.uniform_matrix4fv_with_f32_array(
-            u_world.as_ref(),
-            false,
-            &Mat4::IDENTITY.to_cols_array(),
-        );
-        self.context.uniform_matrix4fv_with_f32_array(
-            u_projection.as_ref(),
-            false,
-            &projection.to_cols_array(),
-        );
+        *g.borrow_mut() = Some(Closure::new(move || {
+            &self.clone().draw(canvas.width(), canvas.height());
+            let _ = f.borrow_mut().take();
+            // Schedule ourself for another requestAnimationFrame callback.
+            request_animation_frame(f.borrow().as_ref().unwrap());
+        }));
+        request_animation_frame(g.borrow().as_ref().unwrap());
 
-        let vert_position_count =
-            self.load_buffer_from_array("a_position", vertices, WebGl2RenderingContext::FLOAT);
+        Ok(())
+    }
 
-        self.context.clear_color(0.9, 0.9, 0.9, 1.0);
-        self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
+    #[wasm_bindgen]
+    pub fn draw(&self, canvas_width: u32, canvas_height: u32) {
+        match &self.model {
+            None => {
+                log!("No model in current context to render");
+                panic!();
+            }
+            Some(model) => {
+                let world_matrix = Mat4::IDENTITY;
+                let field_of_view_radians = 60.0 * 3.141592653589793 / 180.0;
+                let aspect: f32 = canvas_width as f32 / canvas_height as f32;
+                let projection_matrix =
+                    Mat4::perspective_lh(field_of_view_radians, aspect, Z_NEAR, Z_FAR);
+                let up: Vec3 = Vec3::from([0.0, 1.0, 0.0]);
+                let view_matrix = Mat4::look_at_lh(CAMERA_POSITION, CAMERA_TARGET, up);
+                // TODO: rotate world space
 
-        self.context
-            .draw_arrays(WebGl2RenderingContext::TRIANGLES, vert_position_count, 0);
+                // get shader uniform locations
+                let u_view = self.context.get_uniform_location(&self.program, "u_view");
+                let u_world = self.context.get_uniform_location(&self.program, "u_world");
+                let u_projection = self
+                    .context
+                    .get_uniform_location(&self.program, "u_projection");
+
+                // set shader uniforms
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_view.as_ref(),
+                    false,
+                    &view_matrix.to_cols_array(),
+                );
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_world.as_ref(),
+                    false,
+                    &world_matrix.to_cols_array(),
+                );
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_projection.as_ref(),
+                    false,
+                    &projection_matrix.to_cols_array(),
+                );
+
+                let vert_position_count = self.load_buffer_from_array(
+                    "a_position",
+                    model.vertices.clone(),
+                    WebGl2RenderingContext::FLOAT,
+                );
+
+                self.context.clear_color(0.9, 0.9, 0.9, 1.0);
+                self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
+                self.context.draw_arrays(
+                    WebGl2RenderingContext::TRIANGLES,
+                    vert_position_count as i32,
+                    0,
+                );
+            }
+        }
     }
 
     #[wasm_bindgen]
@@ -179,8 +221,10 @@ impl WebGLState {
             let mut reader = BufReader::new(&arr_slice[..]);
             match load_model(&mut reader) {
                 Err(e) => log!("Failed to parse into verts, tris, normals {:?}", e),
-                Ok(verts) => {
-                    let _ = &self.clone().update_render_verts(verts);
+                Ok(vertices) => {
+                    let mut context = self.clone();
+                    context.model = Some(Model { vertices });
+                    let _ = context.init_render_loop();
                 }
             };
         }) as Box<dyn Fn(web_sys::ProgressEvent)>);
@@ -316,4 +360,23 @@ impl WebGLState {
         let vert_count = (array.len() / 3) as i32;
         vert_count
     }
+}
+
+fn request_animation_frame(f: &Closure<dyn FnMut()>) {
+    window()
+        .request_animation_frame(f.as_ref().unchecked_ref())
+        .expect("should register `requestAnimationFrame` OK");
+}
+
+fn document() -> web_sys::Document {
+    window()
+        .document()
+        .expect("should have a document on window")
+}
+
+fn body() -> web_sys::HtmlElement {
+    document().body().expect("document should have a body")
+}
+fn window() -> web_sys::Window {
+    web_sys::window().expect("no global `window` exists")
 }
