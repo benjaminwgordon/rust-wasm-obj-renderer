@@ -1,6 +1,5 @@
 mod utils;
 
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
 
@@ -26,6 +25,7 @@ macro_rules! log {
 }
 
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct WebGLState {
     context: WebGl2RenderingContext,
     program: WebGlProgram,
@@ -33,17 +33,50 @@ pub struct WebGLState {
 
 #[wasm_bindgen]
 impl WebGLState {
-    #[wasm_bindgen(constructor)]
-    pub fn new(context: WebGl2RenderingContext, program: WebGlProgram) -> Self {
-        Self { context, program }
+    #[wasm_bindgen]
+    pub fn new() -> Result<WebGLState, JsValue> {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let canvas = document.get_element_by_id("canvas").unwrap();
+        let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into::<web_sys::HtmlCanvasElement>()?;
+
+        let context = canvas
+            .get_context("webgl2")?
+            .unwrap()
+            .dyn_into::<WebGl2RenderingContext>()?;
+
+        let vert_shader = compile_shader(
+            &context,
+            WebGl2RenderingContext::VERTEX_SHADER,
+            r##"
+            attribute vec3 a_position;
+            
+            uniform mat4 u_projection;
+            uniform mat4 u_view;
+            uniform mat4 u_world;
+                 
+            void main() {
+              gl_Position = u_projection * u_view * u_world * vec4(a_position, 0.0);
+            }
+            "##,
+        )?;
+
+        let frag_shader = compile_shader(
+            &context,
+            WebGl2RenderingContext::FRAGMENT_SHADER,
+            r##"precision mediump float;
+
+            void main() {
+                gl_FragColor = vec4(1.0,0.7,0.0,1.0);
+            }
+            "##,
+        )?;
+
+        let program = link_program(&context, &vert_shader, &frag_shader)?;
+
+        Ok(WebGLState { context, program })
     }
 
-    pub fn update_render_verts(
-        &self,
-        indices: Vec<u32>,
-        vertices: Vec<f32>,
-        vertex_normals: Vec<f32>,
-    ) {
+    pub fn update_render_verts(&self, vertices: Vec<f32>) {
         let canvas = self
             .context
             .canvas()
@@ -59,14 +92,9 @@ impl WebGLState {
         self.context.cull_face(WebGl2RenderingContext::BACK);
 
         // get shader uniform locations
-        let u_diffuse = self
-            .context
-            .get_uniform_location(&self.program, "u_diffuse");
+
         let u_view = self.context.get_uniform_location(&self.program, "u_view");
-        let u_world_location = self.context.get_uniform_location(&self.program, "u_world");
-        let u_light_direction = self
-            .context
-            .get_uniform_location(&self.program, "u_lightDirection");
+        let u_world = self.context.get_uniform_location(&self.program, "u_world");
         let u_projection = self
             .context
             .get_uniform_location(&self.program, "u_projection");
@@ -79,131 +107,95 @@ impl WebGLState {
         let up: Vec3 = Vec3::from([0.0, 1.0, 0.0]);
         let camera = glam::f32::Mat4::look_at_lh(CAMERA_POSITION, CAMERA_TARGET, up);
         let view = camera.inverse();
-        let light = Vec3::from([-1.0, 3.0, 5.0]).normalize();
 
-        log!("render time: attempting to load program");
         self.context.use_program(Some(&self.program));
 
         // set shader uniforms
-
         self.context.uniform_matrix4fv_with_f32_array(
             u_view.as_ref(),
             false,
             &view.to_cols_array(),
         );
         self.context.uniform_matrix4fv_with_f32_array(
-            u_world_location.as_ref(),
+            u_world.as_ref(),
             false,
             &Mat4::IDENTITY.to_cols_array(),
         );
-        self.context
-            .uniform3f(u_light_direction.as_ref(), light.x, light.y, light.z);
         self.context.uniform_matrix4fv_with_f32_array(
             u_projection.as_ref(),
             false,
             &projection.to_cols_array(),
         );
-        self.context
-            .uniform4f(u_diffuse.as_ref(), 1.0, 0.7, 0.5, 1.0);
 
-        // let vao = self
-        //     .context
-        //     .create_vertex_array()
-        //     .ok_or("Could not create vertex array object")
-        //     .unwrap();
-        // self.context.bind_vertex_array(Some(&vao));
-
-        log!("attempting to create index buffer");
-        self.load_index_buffer_from_array(indices);
-
-        log!("Attempting to create vertex position buffer");
         let vert_position_count =
             self.load_buffer_from_array("a_position", vertices, WebGl2RenderingContext::FLOAT);
 
-        log!("attempting to create vertex normal buffer");
-        let vert_normals_count = self.load_buffer_from_array(
-            "a_normal",
-            vertex_normals,
-            WebGl2RenderingContext::UNSIGNED_INT,
-        );
-
-        log!("attempting to draw buffers");
         self.context.clear_color(0.9, 0.9, 0.9, 1.0);
         self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
-        // self.context
-        //     .draw_arrays(WebGl2RenderingContext::TRIANGLES, 0, vert_normals_count);
-        self.context.draw_elements_with_f64(
-            WebGl2RenderingContext::TRIANGLES,
-            vert_normals_count,
-            WebGl2RenderingContext::UNSIGNED_SHORT,
-            0.0,
-        );
+        self.context
+            .draw_arrays(WebGl2RenderingContext::TRIANGLES, vert_position_count, 0);
+    }
+
+    #[wasm_bindgen]
+    pub fn load_obj(self, file_input: web_sys::HtmlInputElement) {
+        //Check the file list from the input
+        log!("file input: {:?}", file_input);
+        let filelist = match file_input.files() {
+            Some(files) => {
+                log!("files: {:?}", files);
+                files
+            }
+            None => {
+                log!("files: None");
+                panic!();
+            }
+        };
+
+        //Do not allow blank inputs
+        if filelist.length() < 1 {
+            alert("Please select at least one file.");
+        }
+        if filelist.get(0) == None {
+            alert("Please select a valid file");
+        }
+
+        let file = filelist.get(0).expect("Failed to get File from filelist!");
+        log!("file content: {:?}", file);
+        let file_reader: web_sys::FileReader = match web_sys::FileReader::new() {
+            Ok(f) => f,
+            Err(_) => {
+                alert("There was an error creating a file reader");
+                web_sys::FileReader::new().expect("")
+            }
+        };
+
+        let fr_c = file_reader.clone();
+        // create onLoadEnd callback
+
+        let onloadend_cb = Closure::wrap(Box::new(move |_e: web_sys::ProgressEvent| {
+            let array = js_sys::Uint8Array::new(&fr_c.result().unwrap());
+            let arr_slice = array.to_vec();
+            let mut reader = BufReader::new(&arr_slice[..]);
+            match load_model(&mut reader) {
+                Err(e) => log!("Failed to parse into verts, tris, normals {:?}", e),
+                Ok(verts) => {
+                    let _ = &self.clone().update_render_verts(verts);
+                }
+            };
+        }) as Box<dyn Fn(web_sys::ProgressEvent)>);
+
+        file_reader.set_onloadend(Some(onloadend_cb.as_ref().unchecked_ref()));
+        file_reader
+            .read_as_array_buffer(&file)
+            .expect("blob not readable");
+        onloadend_cb.forget();
     }
 }
 
 #[wasm_bindgen]
 extern "C" {
     fn alert(s: &str);
-}
-
-#[wasm_bindgen]
-pub fn greet(name: &str) {
-    alert(format!("Hello, {}!", name).as_str());
-}
-
-#[wasm_bindgen]
-pub fn create_webgl_state() -> Result<WebGLState, JsValue> {
-    let document = web_sys::window().unwrap().document().unwrap();
-    let canvas = document.get_element_by_id("canvas").unwrap();
-    let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into::<web_sys::HtmlCanvasElement>()?;
-
-    let context = canvas
-        .get_context("webgl2")?
-        .unwrap()
-        .dyn_into::<WebGl2RenderingContext>()?;
-
-    let vert_shader = compile_shader(
-        &context,
-        WebGl2RenderingContext::VERTEX_SHADER,
-        r##"
-        attribute vec4 a_position;
-        attribute vec3 a_normal;
-        
-        uniform mat4 u_projection;
-        uniform mat4 u_view;
-        uniform mat4 u_world;
-         
-        varying vec3 v_normal;
-         
-        void main() {
-          gl_Position = u_projection * u_view * u_world * a_position;
-          v_normal = mat3(u_world) * a_normal;
-        }
-        "##,
-    )?;
-
-    let frag_shader = compile_shader(
-        &context,
-        WebGl2RenderingContext::FRAGMENT_SHADER,
-        r##"precision mediump float;
- 
-        varying vec3 v_normal;
-        
-        uniform vec4 u_diffuse;
-        uniform vec3 u_lightDirection;
-         
-        void main () {
-          vec3 normal = normalize(v_normal);
-          float fakeLight = dot(u_lightDirection, normal) * .5 + .5;
-          gl_FragColor = vec4(u_diffuse.rgb * fakeLight, u_diffuse.a);
-        }
-        "##,
-    )?;
-
-    let program = link_program(&context, &vert_shader, &frag_shader)?;
-
-    Ok(WebGLState::new(context, program))
 }
 
 pub fn compile_shader(
@@ -256,71 +248,9 @@ pub fn link_program(
     }
 }
 
-#[wasm_bindgen]
-pub fn load_obj(web_gl_state: WebGLState, file_input: web_sys::HtmlInputElement) {
-    //Check the file list from the input
-    log!("file input: {:?}", file_input);
-    let filelist = match file_input.files() {
-        Some(files) => {
-            log!("files: {:?}", files);
-            files
-        }
-        None => {
-            log!("files: None");
-            panic!();
-        }
-    };
-
-    //Do not allow blank inputs
-    if filelist.length() < 1 {
-        alert("Please select at least one file.");
-    }
-    if filelist.get(0) == None {
-        alert("Please select a valid file");
-    }
-
-    let file = filelist.get(0).expect("Failed to get File from filelist!");
-    log!("file content: {:?}", file);
-    let file_reader: web_sys::FileReader = match web_sys::FileReader::new() {
-        Ok(f) => f,
-        Err(_) => {
-            alert("There was an error creating a file reader");
-            web_sys::FileReader::new().expect("")
-        }
-    };
-
-    let fr_c = file_reader.clone();
-    // create onLoadEnd callback
-    let onloadend_cb = Closure::wrap(Box::new(move |_e: web_sys::ProgressEvent| {
-        let array = js_sys::Uint8Array::new(&fr_c.result().unwrap());
-        //let len = array.byte_length() as usize;
-        // here you can for example use the received image/png data
-        let arr_slice = array.to_vec();
-        let obj_as_str = std::str::from_utf8(&arr_slice).unwrap();
-        log!("Raw UTF-8 Encoded OBJ file: {:?}", obj_as_str);
-        let mut reader = BufReader::new(&arr_slice[..]);
-
-        match load_model(&mut reader) {
-            Err(e) => log!("Failed to parse into verts, tris, normals {:?}", e),
-            Ok((indices, verts, normals)) => {
-                log!("verts: {:?}\normals:{:?}", verts, normals);
-                web_gl_state.update_render_verts(indices, verts, normals);
-            }
-        };
-    }) as Box<dyn Fn(web_sys::ProgressEvent)>);
-
-    file_reader.set_onloadend(Some(onloadend_cb.as_ref().unchecked_ref()));
-    file_reader
-        .read_as_array_buffer(&file)
-        .expect("blob not readable");
-    onloadend_cb.forget();
-}
-
-type Indices = Vec<u32>;
 type Verts = Vec<f32>;
-type Normals = Vec<f32>;
 
-fn load_model(reader: &mut impl BufRead) -> Result<(Indices, Verts, Normals), Box<dyn Error>> {
+fn load_model(reader: &mut impl BufRead) -> Result<Verts, Box<dyn Error>> {
     let (models, _) = tobj::load_obj_buf(
         reader,
         &tobj::LoadOptions {
@@ -334,62 +264,14 @@ fn load_model(reader: &mut impl BufRead) -> Result<(Indices, Verts, Normals), Bo
     )?;
 
     let mut verticies: Vec<f32> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut vertex_normals = Vec::new();
+
     for tobj::Model { mesh, .. } in models {
-        log!("Indices: {:?}", mesh.indices);
-        log!("Normals: {:?}", mesh.normals);
-        log!("Normal_Indices: {:?}", mesh.normal_indices);
-
-        indices.extend(mesh.indices);
         verticies.extend(mesh.positions);
-        vertex_normals.extend(mesh.normals);
     }
-
-    let copy_cube_normals = Vec::<f32>::from([
-        0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 1.0000, -1.0000, 0.0000, 0.0000, 0.0000, -1.0000,
-        0.0000, 1.0000, 0.0000, 0.0000, 0.0000, 0.0000, -1.0000,
-    ]);
-
-    Ok((indices, verticies, vertex_normals))
+    Ok(verticies)
 }
 
 impl WebGLState {
-    // call for location "position" and "v_normal"
-    pub fn load_index_buffer_from_array(&self, array: Vec<u32>) {
-        let buffer = self
-            .context
-            .create_buffer()
-            .ok_or("Failed to create buffer")
-            .unwrap();
-
-        log!("Attemping to bind index buffer to the ELEMENT_ARRAY");
-        self.context
-            .bind_buffer(WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER, Some(&buffer));
-
-        unsafe {
-            let positions = array
-                .iter()
-                .map(|i| {
-                    let casti32 = TryInto::<u16>::try_into(i.clone())
-                        .expect("could not cast element indices");
-                    casti32
-                })
-                .collect::<Vec<u16>>();
-            log!("Positions: {:?}", positions);
-            let positions_array_buf_view = js_sys::Uint16Array::view(&positions);
-            //::Unsigned16Array::view(&positions);
-
-            self.context.buffer_data_with_array_buffer_view(
-                WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
-                &positions_array_buf_view,
-                WebGl2RenderingContext::STATIC_DRAW,
-            );
-        }
-        self.context
-            .bind_buffer(WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER, Some(&buffer));
-    }
-
     pub fn load_buffer_from_array(&self, location: &str, array: Vec<f32>, data_type: u32) -> i32 {
         log!(
             "Getting vertex attribute location for location({:?})",
