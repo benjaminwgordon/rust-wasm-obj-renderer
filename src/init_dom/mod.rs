@@ -1,8 +1,12 @@
+use std::{cell::RefCell, rc::Rc};
+
 /**
  * sets up the initial DOM state
  */
-use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
-use web_sys::{Document, HtmlCanvasElement, HtmlElement, HtmlInputElement, Window};
+use wasm_bindgen::prelude::*;
+use web_sys::{Document, HtmlCanvasElement, HtmlElement, HtmlInputElement, MouseEvent, Window};
+
+use crate::{log, web_gl_state::WebGLState};
 
 extern crate web_sys;
 
