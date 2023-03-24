@@ -1,32 +1,21 @@
 use glam::{Mat4, Vec3};
-use wasm_bindgen::{
-    prelude::{wasm_bindgen, Closure},
-    JsCast, JsValue,
-};
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebGlProgram, WebGlShader};
 
 use crate::{log, CAMERA_POSITION, CAMERA_TARGET, Z_FAR, Z_NEAR};
 
-#[wasm_bindgen]
-#[derive(Clone, Debug)]
 pub struct WebGLState {
     context: WebGl2RenderingContext,
     program: WebGlProgram,
     vertices: Option<Vec<f32>>,
 }
 
-#[wasm_bindgen]
 impl WebGLState {
-    pub fn vertices(&self) -> Option<Vec<f32>> {
-        self.vertices.clone()
-    }
-
     pub fn set_vertices(&mut self, vertices: Option<Vec<f32>>) {
         self.vertices = vertices;
     }
 
-    #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Result<WebGLState, JsValue> {
+    pub fn new(canvas: &HtmlCanvasElement) -> Result<WebGLState, JsValue> {
         let context = canvas
             .get_context("webgl2")?
             .unwrap()
@@ -68,7 +57,6 @@ impl WebGLState {
         })
     }
 
-    #[wasm_bindgen]
     pub fn draw(
         &self,
         canvas_width: u32,
@@ -88,6 +76,7 @@ impl WebGLState {
                 self.context.enable(WebGl2RenderingContext::CULL_FACE);
                 self.context.cull_face(WebGl2RenderingContext::BACK);
                 self.context.use_program(Some(&self.program));
+
                 let world_matrix = Mat4::IDENTITY;
                 let field_of_view_radians = 60.0 * 3.141592653589793 / 180.0;
                 let aspect: f32 = canvas_width as f32 / canvas_height as f32;
@@ -122,6 +111,7 @@ impl WebGLState {
                     false,
                     &view_matrix.to_cols_array(),
                 );
+
                 self.context.uniform_matrix4fv_with_f32_array(
                     u_world.as_ref(),
                     false,
@@ -143,7 +133,6 @@ impl WebGLState {
                 self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
                 self.context.draw_arrays(
-                    // WebGl2RenderingContext::POINTS,
                     WebGl2RenderingContext::POINTS,
                     0,
                     vert_position_count as i32,
@@ -152,6 +141,7 @@ impl WebGLState {
             }
         }
     }
+
     pub fn load_buffer_from_array(&self, location: &str, array: Vec<f32>, data_type: u32) -> i32 {
         let position_attribute_location = self.context.get_attrib_location(&self.program, location);
 
@@ -236,11 +226,4 @@ pub fn link_program(
             .get_program_info_log(&program)
             .unwrap_or_else(|| String::from("Unknown error creating program object")))
     }
-}
-
-pub fn request_animation_frame(f: &Closure<dyn FnMut()>) {
-    web_sys::window()
-        .unwrap()
-        .request_animation_frame(f.as_ref().unchecked_ref())
-        .unwrap();
 }
