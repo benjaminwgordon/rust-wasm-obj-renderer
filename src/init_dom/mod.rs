@@ -4,9 +4,9 @@ use std::{cell::RefCell, mem, rc::Rc};
  * sets up the initial DOM state
  */
 use wasm_bindgen::prelude::*;
-use web_sys::{HtmlCanvasElement, HtmlInputElement, MouseEvent};
+use web_sys::{HtmlCanvasElement, HtmlInputElement, MouseEvent, WheelEvent};
 
-use crate::SharedState;
+use crate::{log, SharedState};
 
 extern crate web_sys;
 
@@ -16,12 +16,6 @@ pub struct Dom {
 }
 
 impl Dom {
-    // getters are required for all non-copy struct fields for passing to JS
-
-    pub fn canvas_dimensions(&self) -> [u32; 2] {
-        [self.canvas.width(), self.canvas.height()]
-    }
-
     pub fn new() -> Result<Dom, JsValue> {
         let window = web_sys::window().expect("window exists in DOM");
         let document = window.document().expect("document exists in widow");
@@ -73,7 +67,32 @@ impl Dom {
                 false,
             );
         }) as Box<dyn FnMut()>);
-        let mouse_drag_shared_state = shared_state.clone();
+
+        let mouse_wheel_shared_state = shared_state.clone();
+        let mouse_wheel_event_callback = Closure::wrap(Box::new(move |e: WheelEvent| {
+            e.prevent_default();
+            let prev_offset = mouse_wheel_shared_state.borrow_mut().camera_offset;
+            let scroll_delta = e.delta_y();
+            log!("mouse wheel delta: {:?}", scroll_delta);
+            let scaling_factor: f64 = 0.25;
+            let new_camera_offset = prev_offset + (scaling_factor * scroll_delta) as f32;
+            let new_camera_offset = new_camera_offset.clamp(10.0, 1000.0);
+            let _ = mem::replace(
+                &mut mouse_wheel_shared_state.borrow_mut().camera_offset,
+                new_camera_offset,
+            );
+            mouse_wheel_shared_state.borrow().web_gl_state.draw(
+                800,
+                600,
+                mouse_wheel_shared_state.borrow().current_rotation[0],
+                mouse_wheel_shared_state.borrow().current_rotation[1],
+                mouse_wheel_shared_state.borrow().z_near,
+                mouse_wheel_shared_state.borrow().z_far,
+                mouse_wheel_shared_state.borrow().camera_offset,
+            );
+        }) as Box<dyn FnMut(WheelEvent)>);
+
+        let mouse_drag_shared_state = shared_state;
         let mouse_drag_event_callback = Closure::wrap(Box::new(move |e: MouseEvent| {
             if mouse_drag_shared_state.borrow().canvas_cursor_is_dragging {
                 let prev_x = mouse_drag_shared_state
@@ -88,7 +107,7 @@ impl Dom {
                 let delta_x = prev_x - (e.client_x());
                 let delta_y = prev_y - (e.client_y());
 
-                let prev_rotation_xy = mouse_drag_shared_state.borrow().current_rotation.clone();
+                let prev_rotation_xy = mouse_drag_shared_state.borrow().current_rotation;
                 let new_rotation_x = prev_rotation_xy[0] + delta_x as f32;
                 let new_rotation_x = new_rotation_x % 360.0;
                 let new_rotation_y = prev_rotation_xy[1] + delta_y as f32;
@@ -98,11 +117,14 @@ impl Dom {
                     &mut mouse_drag_shared_state.borrow_mut().current_rotation,
                     [new_rotation_x, new_rotation_y],
                 );
-                let _ = mouse_drag_shared_state.borrow().web_gl_state.draw(
+                mouse_drag_shared_state.borrow().web_gl_state.draw(
                     800,
                     600,
                     mouse_drag_shared_state.borrow().current_rotation[0],
                     mouse_drag_shared_state.borrow().current_rotation[1],
+                    mouse_drag_shared_state.borrow().z_near,
+                    mouse_drag_shared_state.borrow().z_far,
+                    mouse_drag_shared_state.borrow().camera_offset,
                 );
             }
 
@@ -114,23 +136,29 @@ impl Dom {
             );
         }) as Box<dyn FnMut(MouseEvent)>);
 
-        self.canvas.add_event_listener_with_callback(
+        let _ = self.canvas.add_event_listener_with_callback(
             "mousedown",
             mouse_down_event_callback.as_ref().unchecked_ref(),
         );
 
-        self.canvas.add_event_listener_with_callback(
+        let _ = self.canvas.add_event_listener_with_callback(
             "mouseup",
             mouse_up_event_callback.as_ref().unchecked_ref(),
         );
 
-        self.canvas.add_event_listener_with_callback(
+        let _ = self.canvas.add_event_listener_with_callback(
             "mousemove",
             mouse_drag_event_callback.as_ref().unchecked_ref(),
+        );
+
+        let _ = self.canvas.add_event_listener_with_callback(
+            "wheel",
+            mouse_wheel_event_callback.as_ref().unchecked_ref(),
         );
 
         mouse_down_event_callback.forget();
         mouse_up_event_callback.forget();
         mouse_drag_event_callback.forget();
+        mouse_wheel_event_callback.forget();
     }
 }

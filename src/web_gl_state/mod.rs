@@ -1,8 +1,10 @@
+use std::f32::consts::PI;
+
 use glam::{Mat4, Vec3};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebGlProgram, WebGlShader};
 
-use crate::{log, CAMERA_POSITION, CAMERA_TARGET, Z_FAR, Z_NEAR};
+use crate::{log, CAMERA_TARGET};
 
 pub struct WebGLState {
     context: WebGl2RenderingContext,
@@ -63,7 +65,10 @@ impl WebGLState {
         canvas_height: u32,
         x_rot: f32,
         y_rot: f32,
-    ) -> Result<(), JsValue> {
+        z_near: f32,
+        z_far: f32,
+        camera_offset: f32,
+    ) {
         match &self.vertices {
             None => {
                 log!("no vertices available to buffer");
@@ -78,20 +83,23 @@ impl WebGLState {
                 self.context.use_program(Some(&self.program));
 
                 let world_matrix = Mat4::IDENTITY;
-                let field_of_view_radians = 60.0 * 3.141592653589793 / 180.0;
+                let field_of_view_radians = 60.0 * PI / 180.0;
                 let aspect: f32 = canvas_width as f32 / canvas_height as f32;
                 let projection_matrix =
-                    Mat4::perspective_lh(field_of_view_radians, aspect, Z_NEAR, Z_FAR);
+                    Mat4::perspective_lh(field_of_view_radians, aspect, z_near, z_far);
                 let up: Vec3 = Vec3::from([0.0, 1.0, 0.0]);
-                let view_matrix = Mat4::look_at_lh(CAMERA_POSITION, CAMERA_TARGET, up);
+                let view_matrix = Mat4::look_at_lh(
+                    Vec3::from([0.0, camera_offset, camera_offset]),
+                    CAMERA_TARGET,
+                    up,
+                );
 
                 // TODO: rotate world space
-                let x_rotation_matrix =
-                    Mat4::from_rotation_x(-1.0 * y_rot * 3.1515926535 / 180.0 as f32);
+                let x_rotation_matrix = Mat4::from_rotation_x(-1.0 * y_rot * PI / 180.0);
 
                 let y_rotation_matrix = Mat4::from_rotation_y(0.0);
 
-                let z_rotation_matrix = Mat4::from_rotation_z(x_rot * 3.1515926535 / 180.0 as f32);
+                let z_rotation_matrix = Mat4::from_rotation_z(x_rot * PI / 180.0);
 
                 let rotated_world_matrix = world_matrix
                     .mul_mat4(&x_rotation_matrix)
@@ -132,12 +140,8 @@ impl WebGLState {
                 self.context.clear_color(0.2, 0.2, 0.2, 1.0);
                 self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
-                self.context.draw_arrays(
-                    WebGl2RenderingContext::POINTS,
-                    0,
-                    vert_position_count as i32,
-                );
-                Ok(())
+                self.context
+                    .draw_arrays(WebGl2RenderingContext::POINTS, 0, vert_position_count);
             }
         }
     }
@@ -173,8 +177,7 @@ impl WebGLState {
         self.context
             .enable_vertex_attrib_array(position_attribute_location as u32);
 
-        let vert_count = (array.len() / 3) as i32;
-        vert_count
+        (array.len() / 3) as i32
     }
 }
 
