@@ -76,7 +76,7 @@ impl Dom {
             log!("mouse wheel delta: {:?}", scroll_delta);
             let scaling_factor: f64 = 0.25;
             let new_camera_offset = prev_offset + (scaling_factor * scroll_delta) as f32;
-            let new_camera_offset = new_camera_offset.clamp(10.0, 1000.0);
+            let new_camera_offset = new_camera_offset.clamp(1.0, 1000.0);
             let _ = mem::replace(
                 &mut mouse_wheel_shared_state.borrow_mut().camera_offset,
                 new_camera_offset,

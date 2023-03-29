@@ -9,12 +9,12 @@ use crate::{loader::ModelData, log, CAMERA_TARGET};
 pub struct WebGLState {
     context: WebGl2RenderingContext,
     program: WebGlProgram,
-    model_data_collection: Option<Vec<ModelData>>,
+    model_data: Option<ModelData>,
 }
 
 impl WebGLState {
-    pub fn set_model_data_collection(&mut self, model_data_collection: Option<Vec<ModelData>>) {
-        self.model_data_collection = model_data_collection;
+    pub fn set_model_data(&mut self, model_data: Option<ModelData>) {
+        self.model_data = model_data;
     }
 
     pub fn new(canvas: &HtmlCanvasElement) -> Result<WebGLState, JsValue> {
@@ -55,7 +55,7 @@ impl WebGLState {
         Ok(WebGLState {
             context,
             program,
-            model_data_collection: None,
+            model_data: None,
         })
     }
 
@@ -69,12 +69,12 @@ impl WebGLState {
         z_far: f32,
         camera_offset: f32,
     ) {
-        match &self.model_data_collection {
+        match &self.model_data {
             None => {
                 log!("no vertices available to buffer");
                 panic!();
             }
-            Some(model_data_collection) => {
+            Some(model_data) => {
                 self.context
                     .viewport(0, 0, canvas_width as i32, canvas_height as i32);
                 self.context.enable(WebGl2RenderingContext::DEPTH_TEST);
@@ -108,53 +108,47 @@ impl WebGLState {
                 let _ = self.context.clear_color(0.2, 0.2, 0.2, 1.0);
                 self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
-                // render each model in the scene
-                for model in model_data_collection {
-                    // get shader uniform locations
-                    let u_view = self.context.get_uniform_location(&self.program, "u_view");
-                    let u_world = self.context.get_uniform_location(&self.program, "u_world");
-                    let u_projection = self
-                        .context
-                        .get_uniform_location(&self.program, "u_projection");
+                // get shader uniform locations
+                let u_view = self.context.get_uniform_location(&self.program, "u_view");
+                let u_world = self.context.get_uniform_location(&self.program, "u_world");
+                let u_projection = self
+                    .context
+                    .get_uniform_location(&self.program, "u_projection");
 
-                    // set shader uniforms
-                    self.context.uniform_matrix4fv_with_f32_array(
-                        u_view.as_ref(),
-                        false,
-                        &view_matrix.to_cols_array(),
-                    );
+                // set shader uniforms
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_view.as_ref(),
+                    false,
+                    &view_matrix.to_cols_array(),
+                );
 
-                    self.context.uniform_matrix4fv_with_f32_array(
-                        u_world.as_ref(),
-                        false,
-                        &rotated_world_matrix.to_cols_array(),
-                    );
-                    self.context.uniform_matrix4fv_with_f32_array(
-                        u_projection.as_ref(),
-                        false,
-                        &projection_matrix.to_cols_array(),
-                    );
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_world.as_ref(),
+                    false,
+                    &rotated_world_matrix.to_cols_array(),
+                );
+                self.context.uniform_matrix4fv_with_f32_array(
+                    u_projection.as_ref(),
+                    false,
+                    &projection_matrix.to_cols_array(),
+                );
 
-                    let mut vertex_count = 0;
-                    // load vertex position and index data into a buffer for each model rendered
-                    let vert_position_count = self.load_buffer_from_array(
-                        "a_position",
-                        model.vertices.clone(),
-                        WebGl2RenderingContext::FLOAT,
-                    );
-                    self.load_index_buffer_from_array(model.indices.clone());
-                    vertex_count += vert_position_count;
+                let mut vertex_count = 0;
+                // load vertex position and index data into a buffer for each model rendered
+                let vert_position_count = self.load_buffer_from_array(
+                    "a_position",
+                    model_data.vertices.clone(),
+                    WebGl2RenderingContext::FLOAT,
+                );
+                let index_count = self.load_index_buffer_from_array(model_data.indices.clone());
+                vertex_count += vert_position_count;
 
-                    self.context
-                        .draw_arrays(WebGl2RenderingContext::POINTS, 0, vertex_count);
-
-                    // self.context.draw_elements_with_i32(
-                    //     WebGl2RenderingContext::LINES,
-                    //     vertex_count,
-                    //     WebGl2RenderingContext::UNSIGNED_INT,
-                    //     0,
-                    // );
-                }
+                self.context.draw_elements_with_i32(
+                    WebGl2RenderingContext::POINTS,
+                    index_count,
+                    WebGl2RenderingContext::UNSIGNED_INT,
+                    0,
+                );
             }
         }
     }
@@ -213,7 +207,7 @@ impl WebGLState {
             );
         }
 
-        (array.len() / 3) as i32
+        array.len() as i32
     }
 }
 

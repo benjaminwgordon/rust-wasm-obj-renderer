@@ -72,39 +72,109 @@ pub struct ModelData {
     pub indices: Indices,
 }
 
-pub fn load_model(reader: &mut impl BufRead) -> Result<Vec<ModelData>, Box<dyn Error>> {
-    let load_res = tobj::load_obj_buf(
-        reader,
-        &tobj::LoadOptions {
-            reorder_data: false,
-            triangulate: false,
-            single_index: false,
-            ignore_lines: false,
-            ignore_points: false,
-        },
-        |p| {
-            let mtl = Vec::new();
-            let map = AHashMap::<String, usize>::new();
-            Ok((mtl, map))
-        },
+pub fn load_model(reader: &mut impl BufRead) -> Result<ModelData, Box<dyn Error>> {
+    // minimal obj parser that ignores materials, normals, etc...
+    // only parses positions and index matches paths
+
+    let mut vertex_position_list = Vec::<[f32; 3]>::new();
+    // dummy coordinate to support 1 based indexing
+    vertex_position_list.push([0.0, 0.0, 0.0]);
+
+    let mut triangle_list = Vec::<[u32; 3]>::new();
+    //let mut vertex_index_offset: usize = 0;
+    triangle_list.push([0, 0, 0]);
+
+    let mut buf = String::new();
+    while reader.read_line(&mut buf).unwrap() != 0 {
+        let mut split = buf.split_whitespace();
+        let prefix = split.next();
+        match prefix {
+            Some(_) => match prefix {
+                Some(char) => {
+                    //log!("line: {}", buf);
+                    match char {
+                        "v" => {
+                            // assume we have x y and z data
+                            let x_coord = split
+                                .next()
+                                .expect("there is x data")
+                                .parse()
+                                .expect("x_coord should be parsable into f32");
+                            let y_coord = split
+                                .next()
+                                .expect("there is y data")
+                                .parse()
+                                .expect("y_coord should be parsable into f32");
+                            let z_coord = split
+                                .next()
+                                .expect("there is z data")
+                                .parse()
+                                .expect("z_coord should be parsable into f32");
+                            vertex_position_list.push([x_coord, y_coord, z_coord]);
+                        }
+                        "f" => {
+                            let vertex_1_index: u32 = split
+                                .next()
+                                .expect("there is data for vertex 1")
+                                .split("/")
+                                .next()
+                                .expect("there is a vertex number for vertex 1")
+                                .parse()
+                                .expect("there is a u32 parsable index for vertex 1");
+                            let vertex_2_index: u32 = split
+                                .next()
+                                .expect("there is data for vertex 2")
+                                .split("/")
+                                .next()
+                                .expect("there is a vertex number for vertex 2")
+                                .parse()
+                                .expect("there is a u32 parsable index for vertex 2");
+                            let vertex_3_index: u32 = split
+                                .next()
+                                .expect("there is data for vertex 3")
+                                .split("/")
+                                .next()
+                                .expect("there is a vertex number for vertex 3")
+                                .parse()
+                                .expect("there is a u32 parsable index for vertex 3");
+                            triangle_list.push([vertex_1_index, vertex_2_index, vertex_3_index]);
+                        }
+                        "g" => {
+                            // starts a new object (vertex numbering resets)
+                            // vertex_index_offset = vertex_list.len();
+                        }
+                        _ => {
+                            //log!("unreadable line: start with: {}", char);
+                        }
+                    }
+                }
+                None => (),
+            },
+            None => (),
+        }
+        buf.clear();
+    }
+
+    // log!("{:?}", vertex_position_list);
+    // log!("{:?}", triangle_list);
+
+    // flatten vertex data from polygon paths into a single list
+    let flat_triangle_vertex_indexes: Vec<u32> = triangle_list.into_iter().flatten().collect();
+    log!(
+        "{:?}\nlen: {}",
+        flat_triangle_vertex_indexes,
+        flat_triangle_vertex_indexes.len()
     );
 
-    log!("{:?}", load_res);
+    let flat_vertex_coordinates: Vec<f32> = vertex_position_list.into_iter().flatten().collect();
+    log!(
+        "{:?}\nlen: {}",
+        flat_vertex_coordinates,
+        flat_vertex_coordinates.len()
+    );
 
-    if let Ok(load_res) = load_res {
-        let (models, ..) = load_res;
-        let mut model_data_collection: Vec<ModelData> = Vec::new();
-        for (_, model) in models.iter().enumerate() {
-            let mesh = &model.mesh;
-            let model_data = ModelData {
-                vertices: mesh.positions.clone(),
-                indices: mesh.indices.clone(),
-            };
-            model_data_collection.push(model_data);
-        }
-        log!("{:?}", model_data_collection);
-        Ok(model_data_collection)
-    } else {
-        Err("no model".into())
-    }
+    Ok(ModelData {
+        vertices: flat_vertex_coordinates,
+        indices: flat_triangle_vertex_indexes,
+    })
 }

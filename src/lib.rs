@@ -16,11 +16,21 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use web_gl_state::WebGLState;
 use web_sys::HtmlCanvasElement;
 
+// minicooper camera preset
 const CAMERA_TARGET: Vec3 = Vec3 {
     x: -30.0,
     y: 100.0,
     z: 30.0,
 };
+const INITIAL_CAMERA_OFFSET: f32 = 200.0;
+
+// small model camera preset
+// const CAMERA_TARGET: Vec3 = Vec3 {
+//     x: 0.0,
+//     y: 0.0,
+//     z: 0.0,
+// };
+// const INITIAL_CAMERA_OFFSET: f32 = 5.0;
 
 pub struct SharedState {
     canvas_cursor_is_dragging: bool,
@@ -43,7 +53,7 @@ impl SharedState {
             web_gl_state: WebGLState::new(canvas).unwrap(),
             z_near: 0.1,
             z_far: 1000.0,
-            camera_offset: 200.0,
+            camera_offset: INITIAL_CAMERA_OFFSET,
         }
     }
 }
@@ -70,7 +80,7 @@ pub fn main() -> Result<(), JsValue> {
     shared_state
         .borrow_mut()
         .web_gl_state
-        .set_model_data_collection(Some(model_data_collection));
+        .set_model_data(Some(model_data_collection));
 
     // render one initial frame (all future frame draws are driven by user mouse inputs)
     let initial_render_state_rc = shared_state;
