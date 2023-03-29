@@ -1,14 +1,19 @@
+use core::panic;
 use std::{
     error::Error,
     io::{BufRead, BufReader},
 };
 
+use ahash::AHashMap;
+use obj::ObjMaterial;
+use tobj::{load_mtl_buf, MTLLoadResult};
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsCast,
 };
 
 type Verts = Vec<f32>;
+type Indices = Vec<u32>;
 
 use crate::{loader, log};
 
@@ -61,23 +66,45 @@ pub fn load_obj(file_input: web_sys::HtmlInputElement) {
     onloadend_cb.forget();
 }
 
-pub fn load_model(reader: &mut impl BufRead) -> Result<Verts, Box<dyn Error>> {
-    let (models, _) = tobj::load_obj_buf(
+#[derive(Debug)]
+pub struct ModelData {
+    pub vertices: Verts,
+    pub indices: Indices,
+}
+
+pub fn load_model(reader: &mut impl BufRead) -> Result<Vec<ModelData>, Box<dyn Error>> {
+    let load_res = tobj::load_obj_buf(
         reader,
         &tobj::LoadOptions {
             reorder_data: false,
-            single_index: true, //nah
-            triangulate: false, //yes please
-            ignore_points: true,
-            ignore_lines: true,
+            triangulate: false,
+            single_index: false,
+            ignore_lines: false,
+            ignore_points: false,
         },
-        |_| Ok((Vec::new(), Default::default())),
-    )?;
+        |p| {
+            let mtl = Vec::new();
+            let map = AHashMap::<String, usize>::new();
+            Ok((mtl, map))
+        },
+    );
 
-    let mut verticies: Vec<f32> = Vec::new();
+    log!("{:?}", load_res);
 
-    for tobj::Model { mesh, .. } in models {
-        verticies.extend(mesh.positions);
+    if let Ok(load_res) = load_res {
+        let (models, ..) = load_res;
+        let mut model_data_collection: Vec<ModelData> = Vec::new();
+        for (_, model) in models.iter().enumerate() {
+            let mesh = &model.mesh;
+            let model_data = ModelData {
+                vertices: mesh.positions.clone(),
+                indices: mesh.indices.clone(),
+            };
+            model_data_collection.push(model_data);
+        }
+        log!("{:?}", model_data_collection);
+        Ok(model_data_collection)
+    } else {
+        Err("no model".into())
     }
-    Ok(verticies)
 }

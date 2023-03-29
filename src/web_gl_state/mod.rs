@@ -4,17 +4,17 @@ use glam::{Mat4, Vec3};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebGlProgram, WebGlShader};
 
-use crate::{log, CAMERA_TARGET};
+use crate::{loader::ModelData, log, CAMERA_TARGET};
 
 pub struct WebGLState {
     context: WebGl2RenderingContext,
     program: WebGlProgram,
-    vertices: Option<Vec<f32>>,
+    model_data_collection: Option<Vec<ModelData>>,
 }
 
 impl WebGLState {
-    pub fn set_vertices(&mut self, vertices: Option<Vec<f32>>) {
-        self.vertices = vertices;
+    pub fn set_model_data_collection(&mut self, model_data_collection: Option<Vec<ModelData>>) {
+        self.model_data_collection = model_data_collection;
     }
 
     pub fn new(canvas: &HtmlCanvasElement) -> Result<WebGLState, JsValue> {
@@ -55,7 +55,7 @@ impl WebGLState {
         Ok(WebGLState {
             context,
             program,
-            vertices: None,
+            model_data_collection: None,
         })
     }
 
@@ -69,12 +69,12 @@ impl WebGLState {
         z_far: f32,
         camera_offset: f32,
     ) {
-        match &self.vertices {
+        match &self.model_data_collection {
             None => {
                 log!("no vertices available to buffer");
                 panic!();
             }
-            Some(vertices) => {
+            Some(model_data_collection) => {
                 self.context
                     .viewport(0, 0, canvas_width as i32, canvas_height as i32);
                 self.context.enable(WebGl2RenderingContext::DEPTH_TEST);
@@ -96,9 +96,7 @@ impl WebGLState {
 
                 // TODO: rotate world space
                 let x_rotation_matrix = Mat4::from_rotation_x(-1.0 * y_rot * PI / 180.0);
-
                 let y_rotation_matrix = Mat4::from_rotation_y(0.0);
-
                 let z_rotation_matrix = Mat4::from_rotation_z(x_rot * PI / 180.0);
 
                 let rotated_world_matrix = world_matrix
@@ -106,42 +104,57 @@ impl WebGLState {
                     .mul_mat4(&y_rotation_matrix)
                     .mul_mat4(&z_rotation_matrix);
 
-                // get shader uniform locations
-                let u_view = self.context.get_uniform_location(&self.program, "u_view");
-                let u_world = self.context.get_uniform_location(&self.program, "u_world");
-                let u_projection = self
-                    .context
-                    .get_uniform_location(&self.program, "u_projection");
-
-                // set shader uniforms
-                self.context.uniform_matrix4fv_with_f32_array(
-                    u_view.as_ref(),
-                    false,
-                    &view_matrix.to_cols_array(),
-                );
-
-                self.context.uniform_matrix4fv_with_f32_array(
-                    u_world.as_ref(),
-                    false,
-                    &rotated_world_matrix.to_cols_array(),
-                );
-                self.context.uniform_matrix4fv_with_f32_array(
-                    u_projection.as_ref(),
-                    false,
-                    &projection_matrix.to_cols_array(),
-                );
-
-                let vert_position_count = self.load_buffer_from_array(
-                    "a_position",
-                    vertices.clone(),
-                    WebGl2RenderingContext::FLOAT,
-                );
-
-                self.context.clear_color(0.2, 0.2, 0.2, 1.0);
+                // clear the scene
+                let _ = self.context.clear_color(0.2, 0.2, 0.2, 1.0);
                 self.context.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
-                self.context
-                    .draw_arrays(WebGl2RenderingContext::POINTS, 0, vert_position_count);
+                // render each model in the scene
+                for model in model_data_collection {
+                    // get shader uniform locations
+                    let u_view = self.context.get_uniform_location(&self.program, "u_view");
+                    let u_world = self.context.get_uniform_location(&self.program, "u_world");
+                    let u_projection = self
+                        .context
+                        .get_uniform_location(&self.program, "u_projection");
+
+                    // set shader uniforms
+                    self.context.uniform_matrix4fv_with_f32_array(
+                        u_view.as_ref(),
+                        false,
+                        &view_matrix.to_cols_array(),
+                    );
+
+                    self.context.uniform_matrix4fv_with_f32_array(
+                        u_world.as_ref(),
+                        false,
+                        &rotated_world_matrix.to_cols_array(),
+                    );
+                    self.context.uniform_matrix4fv_with_f32_array(
+                        u_projection.as_ref(),
+                        false,
+                        &projection_matrix.to_cols_array(),
+                    );
+
+                    let mut vertex_count = 0;
+                    // load vertex position and index data into a buffer for each model rendered
+                    let vert_position_count = self.load_buffer_from_array(
+                        "a_position",
+                        model.vertices.clone(),
+                        WebGl2RenderingContext::FLOAT,
+                    );
+                    self.load_index_buffer_from_array(model.indices.clone());
+                    vertex_count += vert_position_count;
+
+                    self.context
+                        .draw_arrays(WebGl2RenderingContext::POINTS, 0, vertex_count);
+
+                    // self.context.draw_elements_with_i32(
+                    //     WebGl2RenderingContext::LINES,
+                    //     vertex_count,
+                    //     WebGl2RenderingContext::UNSIGNED_INT,
+                    //     0,
+                    // );
+                }
             }
         }
     }
@@ -176,6 +189,29 @@ impl WebGLState {
         );
         self.context
             .enable_vertex_attrib_array(position_attribute_location as u32);
+
+        (array.len() / 3) as i32
+    }
+
+    pub fn load_index_buffer_from_array(&self, array: Vec<u32>) -> i32 {
+        let buffer = self
+            .context
+            .create_buffer()
+            .ok_or("Failed to create buffer")
+            .unwrap();
+
+        self.context
+            .bind_buffer(WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER, Some(&buffer));
+
+        unsafe {
+            let index_array_buf_view = js_sys::Uint32Array::view(&array);
+
+            self.context.buffer_data_with_array_buffer_view(
+                WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+                &index_array_buf_view,
+                WebGl2RenderingContext::STATIC_DRAW,
+            );
+        }
 
         (array.len() / 3) as i32
     }

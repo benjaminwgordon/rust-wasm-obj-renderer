@@ -64,13 +64,13 @@ pub fn main() -> Result<(), JsValue> {
     // TODO: reintegrate user-uploaded files.  As a temporary workaround, load local file
     let dummy_file = include_str!("../minicooper.obj");
     let mut reader = BufReader::new(Cursor::new(dummy_file));
-    let vertices = load_model(&mut reader).unwrap();
+    let model_data_collection = load_model(&mut reader).unwrap();
 
     // add loaded model's vertices to shared state
     shared_state
         .borrow_mut()
         .web_gl_state
-        .set_vertices(Some(vertices));
+        .set_model_data_collection(Some(model_data_collection));
 
     // render one initial frame (all future frame draws are driven by user mouse inputs)
     let initial_render_state_rc = shared_state;
